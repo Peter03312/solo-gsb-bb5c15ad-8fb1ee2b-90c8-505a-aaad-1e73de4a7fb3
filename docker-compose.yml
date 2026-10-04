@@ -1,0 +1,12 @@
+services:
+  liftover:
+    build: .
+    image: bed-liftover:latest
+    container_name: bed-liftover
+    ports:
+      # 宿主机端口:容器端口；如 8000 被占用可改左侧，例如 "18000:8000"
+      - "${HOST_PORT:-8000}:8000"
+    environment:
+      # 预览表格最多返回的行数（完整结果不受此限制，仍可下载）
+      PREVIEW_LIMIT: "${PREVIEW_LIMIT:-1000}"
+    restart: unless-stopped

@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>离线基因组区间迁移 · BED LiftOver</title>
+<style>
+  :root {
+    --bg: #f5f7fa;
+    --card: #ffffff;
+    --border: #d8dee9;
+    --text: #24292f;
+    --muted: #6b7280;
+    --primary: #2563eb;
+    --ok: #15803d;
+    --partial: #b45309;
+    --ambig: #b91c1c;
+    --fail: #9b1c1c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 20px 28px;
+    background: #10233f;
+    color: #fff;
+  }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 6px 0 0; font-size: 13px; color: #b8c4d8; }
+  main { max-width: 1280px; margin: 24px auto; padding: 0 20px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 20px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  label.field { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  input[type=file] { width: 100%; font-size: 13px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .side-box { display: flex; gap: 24px; align-items: center; margin-top: 8px; }
+  .side-box label { font-weight: 400; font-size: 14px; }
+  .actions { display: flex; gap: 12px; margin-top: 18px; flex-wrap: wrap; align-items: center; }
+  button {
+    border: 0;
+    border-radius: 7px;
+    padding: 9px 20px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #btnConvert { background: var(--primary); color: #fff; }
+  #btnDownload { background: var(--ok); color: #fff; }
+  #errors {
+    display: none;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: var(--fail);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 18px;
+    font-size: 13px;
+    max-height: 220px;
+    overflow: auto;
+  }
+  #errors h3 { margin: 0 0 8px; font-size: 14px; }
+  #errors ul { margin: 0; padding-left: 18px; }
+  #summary { display: none; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  .pill {
+    border-radius: 999px;
+    padding: 5px 14px;
+    font-size: 13px;
+    border: 1px solid var(--border);
+    background: #fbfdff;
+  }
+  .pill b { font-size: 15px; margin-left: 4px; }
+  .pill.mapped { color: var(--ok); }
+  .pill.partial { color: var(--partial); }
+  .pill.ambiguous { color: var(--ambig); }
+  .pill.unmapped { color: var(--fail); }
+  .table-wrap { overflow: auto; max-height: 62vh; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; white-space: nowrap; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid #eceff3; text-align: left; }
+  th { position: sticky; top: 0; background: #eef2f7; z-index: 1; }
+  tr:hover td { background: #f8fafc; }
+  td.note { white-space: normal; min-width: 260px; color: #374151; }
+  .status { font-weight: 600; padding: 2px 8px; border-radius: 5px; font-size: 12px; }
+  .status.mapped { background: #dcfce7; color: var(--ok); }
+  .status.partial { background: #fef3c7; color: var(--partial); }
+  .status.ambiguous { background: #fee2e2; color: var(--ambig); }
+  .status.unmapped { background: #f3f4f6; color: var(--fail); }
+  .empty { color: var(--muted); padding: 24px; text-align: center; font-size: 14px; }
+  #truncNote { font-size: 12px; color: var(--muted); margin: 8px 2px; display: none; }
+  .spinner {
+    display: none;
+    width: 16px; height: 16px;
+    border: 2px solid #c7d2fe;
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>离线基因组区间迁移（BED LiftOver）</h1>
+  <p>上传 BED 与 UCSC chain 文件，在浏览器中预览每条源区间的转换状态并导出结果。全程离线，文件仅在内存中处理。坐标按零基左闭右开 [start, end) 解释。</p>
+</header>
+
+<main>
+  <div id="errors"><h3>输入错误（已阻止导出，未生成任何文件）</h3><ul id="errorList"></ul></div>
+
+  <section class="card">
+    <div class="grid">
+      <div>
+        <label class="field" for="bedFile">BED 文件（至少 chrom / start / end，可选第 6 列 strand）</label>
+        <input type="file" id="bedFile" accept=".bed,.txt,.tsv,text/plain">
+        <div class="hint">支持以 #、track、browser 开头的行；数据行物理行号将写入结果。</div>
+      </div>
+      <div>
+        <label class="field" for="chainFile">UCSC chain 文件</label>
+        <input type="file" id="chainFile" accept=".chain,.txt,text/plain">
+        <div class="hint">支持标准 chain header（13 字段）与 size [dt dq] 数据行。</div>
+      </div>
+    </div>
+
+    <label class="field" style="margin-top:16px;">BED 区间属于 chain 的哪一侧？</label>
+    <div class="side-box">
+      <label><input type="radio" name="side" value="target" checked> target 侧（转换到 query）</label>
+      <label><input type="radio" name="side" value="query"> query 侧（转换到 target）</label>
+    </div>
+
+    <div class="actions">
+      <button id="btnConvert">转换并预览</button>
+      <button id="btnDownload" disabled>下载结果（TSV）</button>
+      <span class="spinner" id="spinner"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <div id="summary"></div>
+    <div id="truncNote"></div>
+    <div class="table-wrap">
+      <table id="resultTable" style="display:none;">
+        <thead>
+          <tr>
+            <th>源行号</th><th>源染色体</th><th>源起</th><th>源止</th><th>源方向</th>
+            <th>状态</th><th>片段</th>
+            <th>目标染色体</th><th>目标起</th><th>目标止</th><th>目标方向</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody id="resultBody"></tbody>
+      </table>
+      <div class="empty" id="emptyHint">尚未转换。选择文件与源侧后点击「转换并预览」。</div>
+    </div>
+  </section>
+</main>
+
+<script>
+const STATUS_TEXT = {
+  mapped: "完整映射",
+  partial: "部分映射",
+  ambiguous: "歧义",
+  unmapped: "无映射",
+};
+
+const $ = (id) => document.getElementById(id);
+let currentFiles = null;
+
+function showErrors(errors) {
+  const box = $("errors");
+  const list = $("errorList");
+  list.innerHTML = "";
+  for (const e of errors) {
+    const li = document.createElement("li");
+    li.textContent = e;
+    list.appendChild(li);
+  }
+  box.style.display = "block";
+}
+
+function hideErrors() {
+  $("errors").style.display = "none";
+}
+
+function currentSide() {
+  return document.querySelector('input[name=side"]:checked').value;
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function renderSummary(data) {
+  const s = data.stats;
+  const box = $("summary");
+  box.style.display = "flex";
+  box.innerHTML =
+    `<span class="pill">源区间（数据行）<b>${data.bed_rows}</b></span>` +
+    `<span class="pill">结果行数（含拆分片段）<b>${data.result_rows}</b></span>` +
+    `<span class="pill mapped">完整映射<b>${s.mapped}</b></span>` +
+    `<span class="pill partial">部分映射<b>${s.partial}</b></span>` +
+    `<span class="pill ambiguous">歧义<b>${s.ambiguous}</b></span>` +
+    `<span class="pill unmapped">无映射<b>${s.unmapped}</b></span>`;
+}
+
+function renderTable(rows) {
+  const body = $("resultBody");
+  body.innerHTML = "";
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    const frag = r.frag_count > 0 ? `${r.frag_index}/${r.frag_count}` : "—";
+    tr.innerHTML =
+      `<td>${r.source_line}</td>` +
+      `<td>${esc(r.source_chrom)}</td>` +
+      `<td>${r.source_start}</td><td>${r.source_end}</td>` +
+      `<td>${esc(r.source_strand)}</td>` +
+      `<td><span class="status ${r.status}">${STATUS_TEXT[r.status] || r.status}</span></td>` +
+      `<td>${frag}</td>` +
+      `<td>${esc(r.dest_chrom) || "—"}</td>` +
+      `<td>${esc(r.dest_start) || "—"}</td>` +
+      `<td>${esc(r.dest_end) || "—"}</td>` +
+      `<td>${esc(r.dest_strand) || "—"}</td>` +
+      `<td class="note">${esc(r.note)}</td>`;
+    body.appendChild(tr);
+  }
+  $("resultTable").style.display = "table";
+  $("emptyHint").style.display = "none";
+}
+
+async function convert() {
+  hideErrors();
+  const bed = $("bedFile").files[0];
+  const chain = $("chainFile").files[0];
+  if (!bed || !chain) {
+    showErrors(["请同时选择 BED 文件和 chain 文件。"]);
+    return;
+  }
+  const fd = new FormData();
+  fd.append("bed", bed);
+  fd.append("chain", chain);
+  fd.append("side", currentSide());
+
+  $("spinner").style.display = "inline-block";
+  $("btnConvert").disabled = true;
+  try {
+    const resp = await fetch("/api/convert", { method: "POST", body: fd });
+    if (!resp.ok) {
+      let msg = [`转换失败（HTTP ${resp.status}）`];
+      try {
+        const j = await resp.json();
+        if (Array.isArray(j.detail)) msg = j.detail.map((x) => x.error || JSON.stringify(x));
+      } catch (_) {}
+      showErrors(msg);
+      $("btnDownload").disabled = true;
+      return;
+    }
+    const data = await resp.json();
+    renderSummary(data);
+    renderTable(data.rows);
+    const note = $("truncNote");
+    if (data.truncated) {
+      note.style.display = "block";
+      note.textContent = `预览仅显示前 ${data.preview_limit} 行，完整结果请下载 TSV（共 ${data.result_rows} 行）。`;
+    } else {
+      note.style.display = "none";
+    }
+    currentFiles = { bed, chain };
+    $("btnDownload").disabled = false;
+  } finally {
+    $("spinner").style.display = "none";
+    $("btnConvert").disabled = false;
+  }
+}
+
+async function download() {
+  if (!currentFiles) return;
+  hideErrors();
+  const fd = new FormData();
+  fd.append("bed", currentFiles.bed);
+  fd.append("chain", currentFiles.chain);
+  fd.append("side", currentSide());
+  $("spinner").style.display = "inline-block";
+  try {
+    const resp = await fetch("/api/export", { method: "POST", body: fd });
+    if (!resp.ok) {
+      let msg = [`导出失败（HTTP ${resp.status}），未生成下载文件`];
+      try {
+        const j = await resp.json();
+        if (Array.isArray(j.detail)) msg = j.detail.map((x) => x.error || JSON.stringify(x));
+      } catch (_) {}
+      showErrors(msg);
+      $("btnDownload").disabled = true;
+      return;
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "liftover_result.tsv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } finally {
+    $("spinner").style.display = "none";
+  }
+}
+
+$("btnConvert").addEventListener("click", convert);
+$("btnDownload").addEventListener("click", download);
+
+// 输入变更后旧预览/下载资格失效，避免下载到与当前选择不一致的结果
+for (const id of ["bedFile", "chainFile"]) {
+  $(id).addEventListener("change", () => {
+    currentFiles = null;
+    $("btnDownload").disabled = true;
+    hideErrors();
+  });
+}
+document.querySelectorAll('input[name=side"]').forEach((r) =>
+  r.addEventListener("change", () => {
+    currentFiles = null;
+    $("btnDownload").disabled = true;
+  })
+);
+</script>
+</body>
+</html>
